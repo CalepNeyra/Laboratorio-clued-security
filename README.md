@@ -52,3 +52,16 @@ El motor de políticas centralizado (`evaluarPoliticaSeguridad`) valida tanto lo
    ```bash
    git clone https://github.com/CalepNeyra/Laboratorio-clued-security.git
    cd Laboratorio-clued-security
+
+   ---
+
+### 3. Comandos de Git para Subir los Cambios
+
+Asegúrate de agregar los `.env` al `.gitignore` para no subir secretos, pero **SÍ subir los `.env.example`** y el `README.md` actualizado:
+
+```bash
+# Registrar cambios y subir a GitHub
+git add backend/.env.example frontend/.env.example README.md
+git add .
+git commit -m "docs: agrega archivos .env.example e instrucciones completas para evaluador"
+git push origin main
