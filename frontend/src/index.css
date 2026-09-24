@@ -1,0 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+body {
+  background-color: #0d1117;
+  color: #c9d1d9;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Cards & Panel */
+.card-dark {
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+}
+
+.card-header-dark {
+  background-color: #21262d;
+  border-bottom: 1px solid #30363d;
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* Forms & Inputs */
+.form-control-dark, .form-select-dark {
+  background-color: #0d1117 !important;
+  border: 1px solid #30363d !important;
+  color: #f0f6fc !important;
+  font-size: 0.875rem;
+}
+
+.form-control-dark:focus, .form-select-dark:focus {
+  border-color: #58a6ff !important;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25) !important;
+}
+
+/* Tabs */
+.nav-tabs-dark {
+  border-bottom: 1px solid #30363d;
+}
+
+.nav-tabs-dark .nav-link {
+  color: #8b949e;
+  border: none;
+  font-size: 0.9rem;
+  padding: 10px 16px;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-tabs-dark .nav-link:hover {
+  color: #c9d1d9;
+}
+
+.nav-tabs-dark .nav-link.active {
+  color: #58a6ff;
+  background: transparent;
+  border-bottom: 2px solid #58a6ff;
+  font-weight: 600;
+}
+
+/* Code Output */
+pre.code-block {
+  background-color: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  color: #7ee787;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}

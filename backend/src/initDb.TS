@@ -1,112 +1,126 @@
-import { getDB } from './config/database';
+import { pool } from './config/database';
 
 async function initDB() {
-  const db = await getDB();
+  console.log('Cargando base de datos PostgreSQL con atributos completos (5.1 y 5.2)...');
+  const client = await pool.connect();
 
-  console.log('Reiniciando base de datos con usuarios de prueba...');
+  try {
+    await client.query(`
+      DROP TABLE IF EXISTS auditoria CASCADE;
+      DROP TABLE IF EXISTS documentos CASCADE;
+      DROP TABLE IF EXISTS usuarios CASCADE;
+      DROP TABLE IF EXISTS rol_permisos CASCADE;
+      DROP TABLE IF EXISTS permisos CASCADE;
+      DROP TABLE IF EXISTS roles CASCADE;
+      DROP TABLE IF EXISTS departamentos CASCADE;
 
-  // Limpiar tablas previas para evitar inconsistencias
-  await db.exec(`
-    DROP TABLE IF EXISTS auditoria;
-    DROP TABLE IF EXISTS documentos;
-    DROP TABLE IF EXISTS usuarios;
-    DROP TABLE IF EXISTS rol_permisos;
-    DROP TABLE IF EXISTS permisos;
-    DROP TABLE IF EXISTS roles;
-    DROP TABLE IF EXISTS departamentos;
+      CREATE TABLE departamentos (
+          id SERIAL PRIMARY KEY,
+          nombre VARCHAR(100) UNIQUE NOT NULL
+      );
 
-    CREATE TABLE departamentos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL UNIQUE
-    );
+      CREATE TABLE roles (
+          id SERIAL PRIMARY KEY,
+          nombre VARCHAR(100) UNIQUE NOT NULL
+      );
 
-    CREATE TABLE roles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL UNIQUE
-    );
+      CREATE TABLE permisos (
+          id SERIAL PRIMARY KEY,
+          codigo VARCHAR(100) UNIQUE NOT NULL,
+          descripcion TEXT
+      );
 
-    CREATE TABLE permisos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        codigo TEXT NOT NULL UNIQUE,
-        descripcion TEXT
-    );
+      CREATE TABLE rol_permisos (
+          id_rol INT REFERENCES roles(id) ON DELETE CASCADE,
+          id_permiso INT REFERENCES permisos(id) ON DELETE CASCADE,
+          PRIMARY KEY (id_rol, id_permiso)
+      );
 
-    CREATE TABLE rol_permisos (
-        id_rol INTEGER,
-        id_permiso INTEGER,
-        PRIMARY KEY (id_rol, id_permiso),
-        FOREIGN KEY(id_rol) REFERENCES roles(id),
-        FOREIGN KEY(id_permiso) REFERENCES permisos(id)
-    );
+      -- 5.1 Atributos del Usuario
+      CREATE TABLE usuarios (
+          id SERIAL PRIMARY KEY,
+          nombre VARCHAR(150) NOT NULL,
+          email VARCHAR(150) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          id_rol INT REFERENCES roles(id),
+          id_departamento INT REFERENCES departamentos(id),
+          nivel_seguridad INT CHECK (nivel_seguridad BETWEEN 1 AND 5),
+          pais VARCHAR(50) NOT NULL,
+          tipo_contrato VARCHAR(20) CHECK (tipo_contrato IN ('INTERNO', 'EXTERNO')),
+          estado VARCHAR(20) DEFAULT 'ACTIVO' CHECK (estado IN ('ACTIVO', 'INACTIVO'))
+      );
 
-    CREATE TABLE usuarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        id_rol INTEGER,
-        id_departamento INTEGER,
-        nivel_seguridad INTEGER CHECK (nivel_seguridad BETWEEN 1 AND 5),
-        pais TEXT NOT NULL,
-        tipo_contrato TEXT CHECK (tipo_contrato IN ('INTERNO', 'EXTERNO')),
-        estado TEXT DEFAULT 'ACTIVO' CHECK (estado IN ('ACTIVO', 'INACTIVO')),
-        FOREIGN KEY(id_rol) REFERENCES roles(id),
-        FOREIGN KEY(id_departamento) REFERENCES departamentos(id)
-    );
+      -- 5.2 Atributos del Recurso (Documento)
+      CREATE TABLE documentos (
+          id SERIAL PRIMARY KEY,
+          titulo VARCHAR(200) NOT NULL,
+          descripcion TEXT,
+          propietario_id INT REFERENCES usuarios(id),
+          id_departamento INT REFERENCES departamentos(id),
+          nivel_confidencialidad INT CHECK (nivel_confidencialidad BETWEEN 1 AND 5),
+          estado VARCHAR(20) DEFAULT 'PENDIENTE' CHECK (estado IN ('PENDIENTE', 'PUBLICADO', 'RECHAZADO')),
+          pais VARCHAR(50) NOT NULL,
+          fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE documentos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        titulo TEXT NOT NULL,
-        id_departamento INTEGER,
-        nivel_confidencialidad INTEGER CHECK (nivel_confidencialidad BETWEEN 1 AND 5),
-        estado TEXT DEFAULT 'PENDIENTE' CHECK (estado IN ('PENDIENTE', 'PUBLICADO', 'RECHAZADO')),
-        pais TEXT NOT NULL,
-        propietario_id INTEGER,
-        FOREIGN KEY(id_departamento) REFERENCES departamentos(id),
-        FOREIGN KEY(propietario_id) REFERENCES usuarios(id)
-    );
+      CREATE TABLE auditoria (
+          id SERIAL PRIMARY KEY,
+          usuario_email VARCHAR(150) NOT NULL,
+          rol VARCHAR(50) NOT NULL,
+          departamento_usuario VARCHAR(50) NOT NULL,
+          recurso TEXT NOT NULL,
+          accion VARCHAR(100) NOT NULL,
+          ip_origen VARCHAR(45) DEFAULT '127.0.0.1',
+          fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          resultado VARCHAR(20) CHECK (resultado IN ('PERMITIDO', 'DENEGADO')),
+          motivo TEXT NOT NULL
+      );
 
-    CREATE TABLE auditoria (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        usuario TEXT NOT NULL,
-        recurso TEXT NOT NULL,
-        accion TEXT NOT NULL,
-        fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
-        resultado TEXT CHECK (resultado IN ('PERMITIDO', 'DENEGADO')),
-        motivo TEXT NOT NULL
-    );
+      -- Departamentos
+      INSERT INTO departamentos (id, nombre) VALUES 
+      (1, 'SISTEMAS'), (2, 'FINANZAS'), (3, 'GERENCIA'), (4, 'AUDITORIA');
 
-    -- 1. Departamentos
-    INSERT INTO departamentos (id, nombre) VALUES 
-    (1, 'SISTEMAS'), (2, 'FINANZAS'), (3, 'RRHH');
+      -- 6 Roles Requeridos
+      INSERT INTO roles (id, nombre) VALUES 
+      (1, 'ADMINISTRADOR'), (2, 'GERENTE'), (3, 'SUPERVISOR'), 
+      (4, 'EMPLEADO'), (5, 'AUDITOR'), (6, 'INVITADO');
 
-    -- 2. Roles
-    INSERT INTO roles (id, nombre) VALUES 
-    (1, 'ADMINISTRADOR'), (2, 'SUPERVISOR'), (3, 'EMPLEADO');
+      -- Permisos Matriz
+      INSERT INTO permisos (id, codigo, descripcion) VALUES 
+      (1, 'DOC_CREATE', 'Crear documento'),
+      (2, 'DOC_READ', 'Consultar documento'),
+      (3, 'DOC_UPDATE', 'Modificar documento'),
+      (4, 'DOC_DELETE', 'Eliminar documento'),
+      (5, 'DOC_APPROVE', 'Aprobar documento'),
+      (6, 'AUDIT_READ', 'Ver auditoria'),
+      (7, 'USER_MANAGE', 'Gestionar usuarios'),
+      (8, 'ROLE_ASSIGN', 'Asignar roles');
 
-    -- 3. Permisos RBAC
-    INSERT INTO permisos (id, codigo, descripcion) VALUES
-    (1, 'DOC_READ', 'Leer documentos'),
-    (2, 'DOC_UPDATE', 'Modificar/Aprobar documentos');
+      -- Matriz RBAC
+      INSERT INTO rol_permisos (id_rol, id_permiso) VALUES 
+      (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8),
+      (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6),
+      (3, 1), (3, 2), (3, 3), (3, 5),
+      (4, 1), (4, 2), (4, 3),
+      (5, 2), (5, 6),
+      (6, 2);
 
-    -- 4. Asignar Permisos a Roles (RBAC)
-    INSERT INTO rol_permisos (id_rol, id_permiso) VALUES
-    (1, 1), (1, 2),
-    (2, 1), (2, 2),
-    (3, 1), (3, 2);
+      -- Usuario de prueba (Ejemplo Ana Torres)
+      INSERT INTO usuarios (id, nombre, email, password_hash, id_rol, id_departamento, nivel_seguridad, pais, tipo_contrato, estado) VALUES 
+      (25, 'Ana Torres', 'ana.torres@securedocs.com', '123', 3, 2, 3, 'PERU', 'INTERNO', 'ACTIVO');
 
-    -- 5. Usuarios de los Casos de Prueba
-    INSERT INTO usuarios (id, nombre, email, password_hash, id_rol, id_departamento, nivel_seguridad, pais, tipo_contrato, estado) VALUES 
-    (1, 'Carlos Ruiz', 'carlos.ruiz@securedocs.com', '123', 2, 2, 3, 'PERU', 'INTERNO', 'ACTIVO'),
-    (2, 'Maria RRHH', 'maria.rrhh@securedocs.com', '123', 3, 3, 2, 'PERU', 'INTERNO', 'ACTIVO');
+      -- Documento de prueba (Ejemplo Presupuesto 2027)
+      INSERT INTO documentos (id, titulo, descripcion, propietario_id, id_departamento, nivel_confidencialidad, estado, pais) VALUES 
+      (501, 'Presupuesto 2027', 'Documento de presupuesto anual de Finanzas', 25, 2, 3, 'PENDIENTE', 'PERU');
+    `);
 
-    -- 6. Documentos de Prueba
-    INSERT INTO documentos (id, titulo, id_departamento, nivel_confidencialidad, estado, pais, propietario_id) VALUES 
-    (1, 'Presupuesto Anual', 2, 3, 'PENDIENTE', 'PERU', 1),
-    (2, 'Presupuesto Corporativo', 2, 4, 'PENDIENTE', 'PERU', 1);
-  `);
-
-  console.log('¡Base de datos reseteada con éxito!');
+    console.log('¡Base de datos cargada con todos los atributos de las imágenes 5.1 y 5.2!');
+  } catch (error) {
+    console.error('Error al inicializar PostgreSQL:', error);
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
 
-initDB().catch(console.error);
+initDB();

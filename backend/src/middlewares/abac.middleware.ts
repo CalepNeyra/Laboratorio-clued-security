@@ -1,61 +1,106 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from './auth.middleware';
-import { getDB } from '../config/database';
+import { ABACPolicyEngine, EnvironmentAttributes } from '../policies/abacEngine';
+import { pool } from '../config/database';
 
 export const checkABAC = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const user = req.user;
-
-  if (!user) {
-    return res.status(401).json({ message: 'Usuario no autenticado' });
-  }
-
-  // 1. Verificar Estado
-  if (user.estado !== 'ACTIVO') {
-    return res.status(403).json({
-      message: 'Acceso DENEGADO por ABAC',
-      motivo: 'El usuario no está ACTIVO.'
-    });
-  }
-
   try {
-    const db = await getDB();
+    const user = req.user;
+    if (!user) return res.status(401).json({ message: 'No autenticado' });
 
-    // Obtener todos los documentos cruzando el nombre del departamento
-    const documentos = await db.all(`
-      SELECT d.*, dep.nombre as departamento 
-      FROM documentos d
-      JOIN departamentos dep ON d.id_departamento = dep.id
-    `);
+    const docId = req.params.id;
+    let resource = req.body;
 
-    // Filtrar documentos bajo reglas estrictas ABAC
-    const documentosPermitidos = documentos.filter(doc => {
-      // Regla 1: Departamento (A menos que sea ADMINISTRADOR)
-      const coincideDep = user.rol === 'ADMINISTRADOR' || user.departamento === doc.departamento;
+    if (docId) {
+      const docResult = await pool.query(
+        `SELECT d.*, dep.nombre as departamento 
+         FROM documentos d 
+         JOIN departamentos dep ON d.id_departamento = dep.id 
+         WHERE d.id = $1`,
+        [docId]
+      );
 
-      // Regla 2: Nivel de Seguridad >= Confidencialidad del Documento
-      const nivelSuficiente = user.nivel_seguridad >= doc.nivel_confidencialidad;
+      if (docResult.rows.length === 0) {
+        return res.status(404).json({ message: 'Documento no encontrado' });
+      }
+      resource = docResult.rows[0];
+    }
 
-      // Regla 3: Mismo País
-      const coincidePais = user.pais === doc.pais;
+    const now = new Date();
+    const environment: EnvironmentAttributes = {
+      hora: `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`,
+      fecha: now.toISOString().split('T')[0],
+      direccion_ip: (req.headers['x-forwarded-for'] as string) || req.ip || '127.0.0.1',
+      ubicacion: (req.headers['x-user-location'] as string) || user.pais || 'PERU',
+      dispositivo: ((req.headers['x-device-type'] as string)?.toUpperCase() === 'CORPORATIVO') ? 'CORPORATIVO' : 'PERSONAL'
+    };
 
-      return coincideDep && nivelSuficiente && coincidePais;
+    const actionMap: Record<string, 'READ' | 'CREATE' | 'UPDATE' | 'DELETE' | 'APPROVE'> = {
+      GET: 'READ',
+      POST: 'CREATE',
+      PUT: 'UPDATE',
+      DELETE: 'DELETE',
+      PATCH: 'APPROVE'
+    };
+
+    const evaluation = ABACPolicyEngine.evaluate({
+      usuario: {
+        id: user.id,
+        nombre: user.nombre,
+        email: user.email,
+        rol: user.rol,
+        departamento: user.departamento,
+        nivel_seguridad: user.nivel_seguridad,
+        pais: user.pais,
+        tipo_contrato: user.tipo_contrato,
+        estado: user.estado
+      },
+      recurso: {
+        id: resource.id,
+        titulo: resource.titulo,
+        departamento: resource.departamento,
+        nivel_confidencialidad: resource.nivel_confidencialidad,
+        estado: resource.estado,
+        pais: resource.pais,
+        propietario_id: resource.propietario_id
+      },
+      entorno: environment,
+      accion: actionMap[req.method] || 'READ'
     });
 
-    // ¡AQUÍ ESTÁ LA CLAVE! Si no pasa las reglas de ningún documento, RETORNAR 403
-    if (documentosPermitidos.length === 0) {
+    console.log(`PASO 2 — ABAC`);
+    console.log(`Evaluando Políticas:`);
+    console.log(`- Depto: ${user.departamento} vs ${resource.departamento}`);
+    console.log(`- Nivel Seguridad: ${user.nivel_seguridad} >= Confidencialidad: ${resource.nivel_confidencialidad}`);
+    console.log(`- Entorno: Hora=${environment.hora}, Ubicación=${environment.ubicacion}, Dispositivo=${environment.dispositivo}`);
+
+    if (!evaluation.allowed) {
+      console.log(`-> ABAC = DENEGADO (${evaluation.reason})`);
+      console.log(`RESULTADO FINAL: ACCESO DENEGADO`);
+      console.log(`==================================================\n`);
+
+      await pool.query(
+        `INSERT INTO auditoria (usuario_email, rol, departamento_usuario, recurso, accion, ip_origen, resultado, motivo)
+         VALUES ($1, $2, $3, $4, $5, $6, 'DENEGADO', $7)`,
+        [user.email, user.rol, user.departamento, req.originalUrl, req.method, environment.direccion_ip, evaluation.reason]
+      );
+
       return res.status(403).json({
-        message: 'Acceso DENEGADO por ABAC',
-        motivo: `Denegado: Tu departamento (${user.departamento}) o nivel de seguridad (${user.nivel_seguridad}) no satisfacen las políticas del recurso.`,
-        evaluacion: {
-          departamento_usuario: user.departamento,
-          nivel_seguridad_usuario: user.nivel_seguridad,
-          politica: 'DENEGADO'
-        }
+        message: 'Acceso Denegado por Política ABAC',
+        motivo: evaluation.reason
       });
     }
 
-    // Si tiene acceso, guardar la lista filtrada y dar paso
-    (req as any).documentosPermitidos = documentosPermitidos;
+    console.log(`-> ABAC = PERMITIDO`);
+    console.log(`RESULTADO FINAL: ACCESO AUTORIZADO`);
+    console.log(`==================================================\n`);
+
+    await pool.query(
+      `INSERT INTO auditoria (usuario_email, rol, departamento_usuario, recurso, accion, ip_origen, resultado, motivo)
+       VALUES ($1, $2, $3, $4, $5, $6, 'PERMITIDO', $7)`,
+      [user.email, user.rol, user.departamento, req.originalUrl, req.method, environment.direccion_ip, 'Acceso Autorizado por RBAC + ABAC']
+    );
+
     next();
   } catch (error) {
     return res.status(500).json({ message: 'Error en la evaluación ABAC', error });

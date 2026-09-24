@@ -1,77 +1,63 @@
 import { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { getDB } from '../config/database';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'secreto_super_seguro_laboratorio_6';
+import { pool } from '../config/database';
 
 export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email y contraseña requeridos' });
-  }
-
   try {
-    const db = await getDB();
-    
-    // Consultar usuario con su rol y departamento
-    const user = await db.get(`
-      SELECT u.*, r.nombre as rol, d.nombre as departamento 
-      FROM usuarios u
-      JOIN roles r ON u.id_rol = r.id
-      JOIN departamentos d ON u.id_departamento = d.id
-      WHERE u.email = ?
-    `, [email]);
+    const { email, password } = req.body;
 
-    if (!user) {
-      return res.status(401).json({ message: 'Credenciales inválidas' });
+    // 1. Buscar al usuario por correo uniendo la tabla departamentos
+    const result = await pool.query(
+      `SELECT u.*, r.nombre as rol, d.nombre as departamento 
+       FROM usuarios u 
+       JOIN roles r ON u.id_rol = r.id 
+       LEFT JOIN departamentos d ON u.id_departamento = d.id
+       WHERE u.email = $1`,
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ message: "Credenciales inválidas" });
     }
 
-    // Permitir comparación flexible para las pruebas de desarrollo
-    let validPassword = false;
-    if (user.password_hash === password || password === '123') {
-      validPassword = true;
-    } else {
-      validPassword = await bcrypt.compare(password, user.password_hash);
+    const usuario = result.rows[0];
+
+    // 2. Validación de contraseña en TEXTO PLANO DIRECTO
+    if (usuario.password_hash !== password) {
+      return res.status(401).json({ message: "Credenciales inválidas" });
     }
 
-    if (!validPassword) {
-      return res.status(401).json({ message: 'Credenciales inválidas' });
-    }
-
-    // Generar Token JWT con todos los atributos requeridos para RBAC y ABAC
+    // 3. Generar Token JWT con el campo 'departamento' para la auditoría y RBAC
+    const secret = process.env.JWT_SECRET || 'supersecreto_jwt_key_12345';
     const token = jwt.sign(
       {
-        id: user.id,
-        nombre: user.nombre,
-        email: user.email,
-        rol: user.rol,
-        departamento: user.departamento,
-        nivel_seguridad: user.nivel_seguridad,
-        pais: user.pais,
-        estado: user.estado
+        id: usuario.id,
+        nombre: usuario.nombre,
+        email: usuario.email,
+        rol: usuario.rol,
+        departamento: usuario.departamento || 'SISTEMAS', // Fallback si no tiene asignado uno
+        id_departamento: usuario.id_departamento,
+        nivel_seguridad: usuario.nivel_seguridad,
+        pais: usuario.pais,
+        tipo_contrato: usuario.tipo_contrato
       },
-      JWT_SECRET,
+      secret,
       { expiresIn: '8h' }
     );
 
-    return res.json({
-      message: 'Login exitoso',
+    return res.status(200).json({
+      message: "Login exitoso",
       token,
-      user: {
-        id: user.id,
-        nombre: user.nombre,
-        email: user.email,
-        rol: user.rol,
-        departamento: user.departamento,
-        nivel_seguridad: user.nivel_seguridad,
-        pais: user.pais,
-        estado: user.estado
+      usuario: {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        email: usuario.email,
+        rol: usuario.rol
       }
     });
 
   } catch (error) {
-    return res.status(500).json({ message: 'Error en el servidor', error });
+    console.error("Error en el login:", error);
+    return res.status(500).json({ message: "Error en el servidor", error });
   }
 };

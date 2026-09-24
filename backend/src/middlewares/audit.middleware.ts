@@ -1,26 +1,28 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from './auth.middleware';
-import { getDB } from '../config/database';
+import { pool } from '../config/database';
 
 export const auditLogger = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const usuario = req.user ? req.user.nombre : 'ANONIMO';
-  const recurso = req.originalUrl;
-  const accion = req.method;
-
   res.on('finish', async () => {
-    try {
-      const db = await getDB();
-      const resultado = res.statusCode < 400 ? 'PERMITIDO' : 'DENEGADO';
-      const motivo = `Respuesta con status code ${res.statusCode}`;
-
-      await db.run(
-        `INSERT INTO auditoria (usuario, recurso, accion, resultado, motivo) VALUES (?, ?, ?, ?, ?)`,
-        [usuario, recurso, accion, resultado, motivo]
-      );
-    } catch (err) {
-      console.error('Error guardando registro de auditoria:', err);
+    if (res.statusCode < 400 && req.user) {
+      try {
+        await pool.query(
+          `INSERT INTO auditoria (usuario_email, rol, departamento_usuario, recurso, accion, ip_origen, resultado, motivo)
+           VALUES ($1, $2, $3, $4, $5, $6, 'PERMITIDO', $7)`,
+          [
+            req.user.email,
+            req.user.rol,
+            req.user.departamento,
+            req.originalUrl,
+            req.method,
+            req.ip || '127.0.0.1',
+            req.auditReason || 'Operación realizada con éxito'
+          ]
+        );
+      } catch (error) {
+        console.error('Error guardando log de auditoría:', error);
+      }
     }
   });
-
   next();
 };
